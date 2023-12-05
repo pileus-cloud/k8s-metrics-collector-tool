@@ -121,6 +121,7 @@ func preCheckPrometheus(prometheusCreds PrometheusCreds) error {
         for _, name := range result.Data {
             if metricName == name {
                 found = true
+				fmt.Printf("Found metric %s\n", metricName)
                 break
             }
         }
