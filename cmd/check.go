@@ -9,32 +9,40 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-type PrometheusCreds struct {
+type PrometheusParams struct {
 	url      string
 	username string
 	password string
 	headers  map[string]string
+	queryCondition string
 }
 
-func queryPrometheusGet(prometheusCreds PrometheusCreds, endpoint string) ([]byte, error) {
+func queryPrometheus(prometheusParams PrometheusParams, query string) ([]byte, error) {
 	var body []byte
+
+	u, _ := url.Parse(prometheusParams.url+"/api/v1/query")
+	q := u.Query()
+	q.Add("query", query)
+
+	u.RawQuery = q.Encode()
 
 	// Create an HTTP client with Basic Authentication credentials
 	client := &http.Client{}
-	req, err := http.NewRequest("GET", prometheusCreds.url+endpoint, nil)
+	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
 		return body, err
 	}
-	if prometheusCreds.username != "" {
-		req.SetBasicAuth(prometheusCreds.username, prometheusCreds.password)
+	if prometheusParams.username != "" {
+		req.SetBasicAuth(prometheusParams.username, prometheusParams.password)
 	}
-	for key, value := range prometheusCreds.headers {
+	for key, value := range prometheusParams.headers {
 		req.Header.Add(key, value)
 	}
 
@@ -59,28 +67,28 @@ func queryPrometheusGet(prometheusCreds PrometheusCreds, endpoint string) ([]byt
 	return body, err
 }
 
-func askPrometheusCredentials() (PrometheusCreds, error) {
-	var prometheusCreds PrometheusCreds
+func askPrometheusParams() (PrometheusParams, error) {
+	var prometheusParams PrometheusParams
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Printf("Prometheus url: ")
 
-	prometheusCreds.url, _ = reader.ReadString('\n')
-	prometheusCreds.url = strings.TrimSpace(prometheusCreds.url)
+	prometheusParams.url, _ = reader.ReadString('\n')
+	prometheusParams.url = strings.TrimSpace(prometheusParams.url)
 
-	if prometheusCreds.url == "" {
-		return prometheusCreds, fmt.Errorf("Prometheus url can't be empty")
+	if prometheusParams.url == "" {
+		return prometheusParams, fmt.Errorf("Prometheus url can't be empty")
 	}
 
 	fmt.Printf("Username (leave empty if no authentication is required): ")
 
-	prometheusCreds.username, _ = reader.ReadString('\n')
-	prometheusCreds.username = strings.TrimSpace(prometheusCreds.username)
+	prometheusParams.username, _ = reader.ReadString('\n')
+	prometheusParams.username = strings.TrimSpace(prometheusParams.username)
 
-	if prometheusCreds.username != "" {
+	if prometheusParams.username != "" {
 		fmt.Printf("Password: ")
 
-		prometheusCreds.password, _ = reader.ReadString('\n')
+		prometheusParams.password, _ = reader.ReadString('\n')
 	}
 
 	fmt.Printf("Additional headers (format: header1:value1,header2:value2, leave empty if no headers required): ")
@@ -88,20 +96,21 @@ func askPrometheusCredentials() (PrometheusCreds, error) {
 	headers = strings.TrimSpace(headers)
 	if headers != "" {
 		headers_array := strings.Split(headers, ",")
-		prometheusCreds.headers = make(map[string]string)
+		prometheusParams.headers = make(map[string]string)
 		for _, header := range headers_array {
 			parts := strings.Split(header, ":")
 			if len(parts) != 2 {
-				return prometheusCreds, fmt.Errorf("Wrong headers format. Use this format: header1:value1,header2:value2")
+				return prometheusParams, fmt.Errorf("Wrong headers format. Use this format: header1:value1,header2:value2")
 			}
-			prometheusCreds.headers[parts[0]] = parts[1]
+			prometheusParams.headers[parts[0]] = parts[1]
 		}
 	}
 	
-	return prometheusCreds, nil
+	prometheusParams.queryCondition = ""
+	return prometheusParams, nil
 }
 
-func preCheckPrometheus(prometheusCreds PrometheusCreds) error {
+func preCheckPrometheus(prometheusParams PrometheusParams) error {
 	expectedMetrics := []string{
 		"kube_node_labels",
 		"kube_node_info",
@@ -120,34 +129,46 @@ func preCheckPrometheus(prometheusCreds PrometheusCreds) error {
 		"kube_replicaset_owner",
 	}
 
-	body, err := queryPrometheusGet(prometheusCreds, "/api/v1/label/__name__/values")
-	if err != nil {
-		return err
-	}
-
-	var result struct {
-		Data []string `json:"data"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("error parsing JSON response: %v", err)
+	type PrometheusResponse struct {
+		Status string `json:"status"`
+		Data   struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Metric struct {
+					Job  string `json:"job"`
+				} `json:"metric"`
+				Value []interface{} `json:"value"`
+			} `json:"result"`
+		} `json:"data"`
 	}
 
 	// Check if expected metrics are present in the response
 	var missingMetrics []string
 	for _, metricName := range expectedMetrics {
-		found := false
-		for _, name := range result.Data {
-			if metricName == name {
-				found = true
-				fmt.Printf("Found metric %s\n", metricName)
-				break
-			}
+
+		body, err := queryPrometheus(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.queryCondition))
+		if err != nil {
+			return err
 		}
-		if !found {
+		var response PrometheusResponse
+	
+		if err := json.Unmarshal(body, &response); err != nil {
+			return fmt.Errorf("error parsing JSON response: %v", err)
+		}
+		if len(response.Data.Result) == 0 {
 			fmt.Printf("Missing metric %s\n", metricName)
 			missingMetrics = append(missingMetrics, metricName)
+			continue
 		}
+		if len(response.Data.Result) == 1 {
+			fmt.Printf("Found metric %s, job name: %s\n", metricName, response.Data.Result[0].Metric.Job)
+			continue
+		}
+		fmt.Printf("Found metric %s with multiple job names\n", metricName)
+		for _, metric := range response.Data.Result {
+			fmt.Printf("Job name: %s\n", metric.Metric.Job)
+		}
+
 	}
 
 	if len(missingMetrics) == 0 {
@@ -168,12 +189,12 @@ var checkCmd = &cobra.Command{
 	Short: "Check if all required metrics are available in prometheus",
 	Long:  `Check if all required metrics are available in prometheus`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		prometheusCreds, err := askPrometheusCredentials()
+		prometheusParams, err := askPrometheusParams()
 		if err != nil {
 			return err
 		}
 
-		return preCheckPrometheus(prometheusCreds)
+		return preCheckPrometheus(prometheusParams)
 	},
 }
 
