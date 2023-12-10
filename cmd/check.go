@@ -24,8 +24,21 @@ type PrometheusParams struct {
 	queryCondition string
 }
 
-func queryPrometheus(prometheusParams PrometheusParams, query string) ([]byte, error) {
-	var body []byte
+type PrometheusResponse struct {
+	Status string `json:"status"`
+	Data   struct {
+		ResultType string `json:"resultType"`
+		Result     []struct {
+			Metric struct {
+				Job  string `json:"job"`
+			} `json:"metric"`
+			Value []interface{} `json:"value"`
+		} `json:"result"`
+	} `json:"data"`
+}
+
+func queryPrometheus(prometheusParams PrometheusParams, query string) (PrometheusResponse, error) {
+	var response PrometheusResponse
 
 	u, _ := url.Parse(prometheusParams.url+"/api/v1/query")
 	q := u.Query()
@@ -37,7 +50,7 @@ func queryPrometheus(prometheusParams PrometheusParams, query string) ([]byte, e
 	client := &http.Client{}
 	req, err := http.NewRequest("GET", u.String(), nil)
 	if err != nil {
-		return body, err
+		return response, err
 	}
 	if prometheusParams.username != "" {
 		req.SetBasicAuth(prometheusParams.username, prometheusParams.password)
@@ -50,21 +63,29 @@ func queryPrometheus(prometheusParams PrometheusParams, query string) ([]byte, e
 	// Perform the request
 	resp, err := client.Do(req)
 	if err != nil {
-		return body, err
+		return response, err
 	}
 	defer resp.Body.Close()
 
 	// Check the HTTP status code
 	if resp.StatusCode != http.StatusOK {
-		return body, fmt.Errorf("unexpected HTTP status code: %v", resp.Status)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			fmt.Printf("Make sure filtering condition is correct")
+		} 
+		return response, fmt.Errorf("unexpected HTTP status code: %v", resp.Status)
 	}
 
 	// Read and parse the response body
-	body, err = io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return body, err
+		return response, err
 	}
-	return body, err
+	
+	if err := json.Unmarshal(body, &response); err != nil {
+		return response, fmt.Errorf("error parsing JSON response: %v", err)
+	}
+
+	return response, err
 }
 
 func askPrometheusParams() (PrometheusParams, error) {
@@ -106,7 +127,10 @@ func askPrometheusParams() (PrometheusParams, error) {
 		}
 	}
 	
-	prometheusParams.queryCondition = ""
+	fmt.Printf("Enter a filtering condition for queries (leave empty if no filtering is required): ")
+	prometheusParams.queryCondition, _ = reader.ReadString('\n')
+	prometheusParams.queryCondition = strings.TrimSpace(prometheusParams.queryCondition)
+
 	return prometheusParams, nil
 }
 
@@ -129,32 +153,15 @@ func preCheckPrometheus(prometheusParams PrometheusParams) error {
 		"kube_replicaset_owner",
 	}
 
-	type PrometheusResponse struct {
-		Status string `json:"status"`
-		Data   struct {
-			ResultType string `json:"resultType"`
-			Result     []struct {
-				Metric struct {
-					Job  string `json:"job"`
-				} `json:"metric"`
-				Value []interface{} `json:"value"`
-			} `json:"result"`
-		} `json:"data"`
-	}
-
 	// Check if expected metrics are present in the response
 	var missingMetrics []string
 	for _, metricName := range expectedMetrics {
 
-		body, err := queryPrometheus(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.queryCondition))
+		response, err := queryPrometheus(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.queryCondition))
 		if err != nil {
 			return err
 		}
-		var response PrometheusResponse
-	
-		if err := json.Unmarshal(body, &response); err != nil {
-			return fmt.Errorf("error parsing JSON response: %v", err)
-		}
+
 		if len(response.Data.Result) == 0 {
 			fmt.Printf("Missing metric %s\n", metricName)
 			missingMetrics = append(missingMetrics, metricName)
