@@ -1,91 +1,110 @@
 /*
 Copyright © 2023 NAME HERE <EMAIL ADDRESS>
-
 */
 package cmd
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"strings"
-	"net/http"
-	"io"
-	"encoding/json"
 
 	"github.com/spf13/cobra"
 )
 
 type PrometheusCreds struct {
-	url string
+	url      string
 	username string
 	password string
+	headers  map[string]string
 }
 
 func queryPrometheusGet(prometheusCreds PrometheusCreds, endpoint string) ([]byte, error) {
 	var body []byte
 
 	// Create an HTTP client with Basic Authentication credentials
-    client := &http.Client{}
-    req, err := http.NewRequest("GET", prometheusCreds.url + endpoint, nil)
-    if err != nil {
-        return body, err
-    }
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", prometheusCreds.url+endpoint, nil)
+	if err != nil {
+		return body, err
+	}
 	if prometheusCreds.username != "" {
 		req.SetBasicAuth(prometheusCreds.username, prometheusCreds.password)
 	}
+	for key, value := range prometheusCreds.headers {
+		req.Header.Add(key, value)
+	}
 
-    // Perform the request
-    resp, err := client.Do(req)
-    if err != nil {
-        return body, err
-    }
-    defer resp.Body.Close()
+
+	// Perform the request
+	resp, err := client.Do(req)
+	if err != nil {
+		return body, err
+	}
+	defer resp.Body.Close()
 
 	// Check the HTTP status code
 	if resp.StatusCode != http.StatusOK {
 		return body, fmt.Errorf("unexpected HTTP status code: %v", resp.Status)
 	}
 
-    // Read and parse the response body
-    body, err = io.ReadAll(resp.Body)
-    if err != nil {
-        return body, err
-    }
-	return body, err 
+	// Read and parse the response body
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return body, err
+	}
+	return body, err
 }
-
 
 func askPrometheusCredentials() (PrometheusCreds, error) {
 	var prometheusCreds PrometheusCreds
 	reader := bufio.NewReader(os.Stdin)
 
-		fmt.Printf("Prometheus url: ")
+	fmt.Printf("Prometheus url: ")
 
-		prometheusCreds.url, _ = reader.ReadString('\n')
-		prometheusCreds.url = strings.TrimSpace(prometheusCreds.url)
+	prometheusCreds.url, _ = reader.ReadString('\n')
+	prometheusCreds.url = strings.TrimSpace(prometheusCreds.url)
 
-		if prometheusCreds.url == "" {
-			return prometheusCreds, fmt.Errorf("Prometheus url can't be empty")
+	if prometheusCreds.url == "" {
+		return prometheusCreds, fmt.Errorf("Prometheus url can't be empty")
+	}
+
+	fmt.Printf("Username (leave empty if no authentication is required): ")
+
+	prometheusCreds.username, _ = reader.ReadString('\n')
+	prometheusCreds.username = strings.TrimSpace(prometheusCreds.username)
+
+	if prometheusCreds.username != "" {
+		fmt.Printf("Password: ")
+
+		prometheusCreds.password, _ = reader.ReadString('\n')
+	}
+
+	fmt.Printf("Additional headers (format: header1:value1,header2:value2, leave empty if no headers required): ")
+	headers, _ := reader.ReadString('\n')
+	headers = strings.TrimSpace(headers)
+	if headers != "" {
+		headers_array := strings.Split(headers, ",")
+		prometheusCreds.headers = make(map[string]string)
+		for _, header := range headers_array {
+			parts := strings.Split(header, ":")
+			if len(parts) != 2 {
+				return prometheusCreds, fmt.Errorf("Wrong headers format. Use this format: header1:value1,header2:value2")
+			}
+			prometheusCreds.headers[parts[0]] = parts[1]
 		}
-
-		fmt.Printf("Username (leave empty if no authentication is required): ")
-
-		prometheusCreds.username, _ = reader.ReadString('\n')
-		prometheusCreds.username = strings.TrimSpace(prometheusCreds.username)
-
-		if prometheusCreds.username != "" {
-			fmt.Printf("Password: ")
-
-			prometheusCreds.password, _ = reader.ReadString('\n')
-		}
+	}
+	
 	return prometheusCreds, nil
 }
 
 func preCheckPrometheus(prometheusCreds PrometheusCreds) error {
-    expectedMetrics := []string{
-        "kube_node_labels",
-        "kube_node_info",
+	expectedMetrics := []string{
+		"kube_node_labels",
+		"kube_node_info",
 		"kube_node_status_capacity",
 		"kube_pod_container_resource_requests",
 		"kube_pod_info",
@@ -99,37 +118,37 @@ func preCheckPrometheus(prometheusCreds PrometheusCreds) error {
 		"kube_pod_created",
 		"kube_pod_completion_time",
 		"kube_replicaset_owner",
-    }
+	}
 
 	body, err := queryPrometheusGet(prometheusCreds, "/api/v1/label/__name__/values")
 	if err != nil {
-        return err
-    }
+		return err
+	}
 
 	var result struct {
-        Data []string `json:"data"`
-    }
+		Data []string `json:"data"`
+	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
 		return fmt.Errorf("error parsing JSON response: %v", err)
 	}
 
-    // Check if expected metrics are present in the response
+	// Check if expected metrics are present in the response
 	var missingMetrics []string
-    for _, metricName := range expectedMetrics {
-        found := false
-        for _, name := range result.Data {
-            if metricName == name {
-                found = true
+	for _, metricName := range expectedMetrics {
+		found := false
+		for _, name := range result.Data {
+			if metricName == name {
+				found = true
 				fmt.Printf("Found metric %s\n", metricName)
-                break
-            }
-        }
-        if !found {
+				break
+			}
+		}
+		if !found {
 			fmt.Printf("Missing metric %s\n", metricName)
-            missingMetrics = append(missingMetrics, metricName)
-        }
-    }
+			missingMetrics = append(missingMetrics, metricName)
+		}
+	}
 
 	if len(missingMetrics) == 0 {
 		fmt.Println("Validation passed")
@@ -143,12 +162,11 @@ func preCheckPrometheus(prometheusCreds PrometheusCreds) error {
 	return nil
 }
 
-
 // checkCmd represents the check command
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check if all required metrics are available in prometheus",
-	Long: `Check if all required metrics are available in prometheus`,
+	Long:  `Check if all required metrics are available in prometheus`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		prometheusCreds, err := askPrometheusCredentials()
 		if err != nil {
