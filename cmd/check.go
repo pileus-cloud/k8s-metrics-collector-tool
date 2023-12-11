@@ -22,6 +22,8 @@ type PrometheusParams struct {
 	password string
 	headers  map[string]string
 	queryCondition string
+	kubeletJobName string
+	kubeStateMetricsJobName string
 }
 
 type PrometheusResponse struct {
@@ -36,6 +38,11 @@ type PrometheusResponse struct {
 		} `json:"result"`
 	} `json:"data"`
 }
+
+const (
+	KubeletDefaultJobName = "kubelet"
+	KubeStateMetricsDefaultJobName = "kube-state-metrics"
+)
 
 func queryPrometheus(prometheusParams PrometheusParams, query string) (PrometheusResponse, error) {
 	var response PrometheusResponse
@@ -131,61 +138,93 @@ func askPrometheusParams() (PrometheusParams, error) {
 	prometheusParams.queryCondition, _ = reader.ReadString('\n')
 	prometheusParams.queryCondition = strings.TrimSpace(prometheusParams.queryCondition)
 
+	fmt.Printf("Enter the kubelet job name (default `kubelet`): ")
+	prometheusParams.kubeletJobName, _ = reader.ReadString('\n')
+	prometheusParams.kubeletJobName = strings.TrimSpace(prometheusParams.kubeletJobName)
+	if prometheusParams.kubeletJobName == "" {
+		prometheusParams.kubeletJobName = KubeletDefaultJobName
+	}
+
+	fmt.Printf("Enter the kube-state-metrics job name (default `kube-state-metrics`): ")
+	prometheusParams.kubeStateMetricsJobName, _ = reader.ReadString('\n')
+	prometheusParams.kubeStateMetricsJobName = strings.TrimSpace(prometheusParams.kubeStateMetricsJobName)
+	if prometheusParams.kubeStateMetricsJobName == "" {
+		prometheusParams.kubeStateMetricsJobName = KubeStateMetricsDefaultJobName
+	}
+
 	return prometheusParams, nil
 }
 
 func preCheckPrometheus(prometheusParams PrometheusParams) error {
-	expectedMetrics := []string{
-		"kube_node_labels",
-		"kube_node_info",
-		"kube_node_status_capacity",
-		"kube_pod_container_resource_requests",
-		"kube_pod_info",
-		"kube_pod_container_info",
-		"kube_pod_container_resource_limits",
-		"container_cpu_usage_seconds_total",
-		"container_memory_usage_bytes",
-		"container_network_receive_bytes_total",
-		"container_network_transmit_bytes_total",
-		"kube_pod_labels",
-		"kube_pod_created",
-		"kube_pod_completion_time",
-		"kube_replicaset_owner",
+	expectedMetrics := map[string]string{
+		"kube_node_labels": prometheusParams.kubeStateMetricsJobName,
+		"kube_node_info": prometheusParams.kubeStateMetricsJobName,
+		"kube_node_status_capacity": prometheusParams.kubeStateMetricsJobName,
+		"kube_pod_container_resource_requests": prometheusParams.kubeStateMetricsJobName,
+		"kube_pod_info": prometheusParams.kubeStateMetricsJobName,
+		"kube_pod_container_info": prometheusParams.kubeStateMetricsJobName,
+		"kube_pod_container_resource_limits": prometheusParams.kubeStateMetricsJobName,
+		"container_cpu_usage_seconds_total": prometheusParams.kubeletJobName,
+		"container_memory_usage_bytes": prometheusParams.kubeletJobName,
+		"container_network_receive_bytes_total": prometheusParams.kubeletJobName,
+		"container_network_transmit_bytes_total": prometheusParams.kubeletJobName,
+		"kube_pod_labels": prometheusParams.kubeStateMetricsJobName,
+		"kube_pod_created": prometheusParams.kubeStateMetricsJobName,
+		"kube_pod_completion_time": prometheusParams.kubeStateMetricsJobName,
+		"kube_replicaset_owner": prometheusParams.kubeStateMetricsJobName,
 	}
 
-	// Check if expected metrics are present in the response
-	var missingMetrics []string
-	for _, metricName := range expectedMetrics {
+	errors := 0
+	missingMetrics := false
+	differentJobNames := false
+	for metricName, jobName := range expectedMetrics {
 
-		response, err := queryPrometheus(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.queryCondition))
+		// TODO: which time interval we want??
+		response, err := queryPrometheus(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})[2h]", metricName, prometheusParams.queryCondition))
 		if err != nil {
 			return err
 		}
 
 		if len(response.Data.Result) == 0 {
 			fmt.Printf("Missing metric %s\n", metricName)
-			missingMetrics = append(missingMetrics, metricName)
+			missingMetrics = true
+			errors += 1
 			continue
 		}
-		if len(response.Data.Result) == 1 {
-			fmt.Printf("Found metric %s, job name: %s\n", metricName, response.Data.Result[0].Metric.Job)
-			continue
-		}
-		fmt.Printf("Found metric %s with multiple job names\n", metricName)
+		
+		differentJobNames = true
 		for _, metric := range response.Data.Result {
-			fmt.Printf("Job name: %s\n", metric.Metric.Job)
+			if metric.Metric.Job == jobName {
+				differentJobNames = false
+				fmt.Printf("Found metric %s, job name: %s\n", metricName, metric.Metric.Job)
+				break
+			}
+		}
+		if differentJobNames {
+			errors += 1
+			fmt.Printf("Can't find metric %s with the specified job name %s\n", metricName, jobName)
+			for _, metric := range response.Data.Result {
+				fmt.Printf("Found job name: %s\n", metric.Metric.Job)
+			}
 		}
 
 	}
 
-	if len(missingMetrics) == 0 {
+	fmt.Println("--------------------------------------------")
+	if errors == 0 {
 		fmt.Println("Validation passed")
 	} else {
-		fmt.Println("--------------------------------------------")
-		fmt.Println("Some metrics are missing, check if all required targets are enabled and healthy")
-		fmt.Println("CAdvisor and kube-state-metrics are required")
-		fmt.Println("--------------------------------------------")
+		fmt.Println("Validation did not pass")
+		if missingMetrics {
+			fmt.Println(" - Some metrics are missing, check if all required targets are enabled and healthy")
+			fmt.Println("   CAdvisor and kube-state-metrics are required")
+		}
+		if differentJobNames {
+			fmt.Println(" - Some metrics have different job names")
+			fmt.Println("   Specify correct job names in prompt")
+		}
 	}
+	fmt.Println("--------------------------------------------")
 
 	return nil
 }
