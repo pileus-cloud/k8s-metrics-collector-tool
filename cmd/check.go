@@ -1,99 +1,19 @@
-/*
-Copyright © 2023 NAME HERE <EMAIL ADDRESS>
-*/
+
 package cmd
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-type PrometheusParams struct {
-	url      string
-	username string
-	password string
-	headers  map[string]string
-	queryCondition string
-	kubeletJobName string
-	kubeStateMetricsJobName string
-}
-
-type PrometheusResponse struct {
-	Status string `json:"status"`
-	Data   struct {
-		ResultType string `json:"resultType"`
-		Result     []struct {
-			Metric struct {
-				Job  string `json:"job"`
-			} `json:"metric"`
-			Value []interface{} `json:"value"`
-		} `json:"result"`
-	} `json:"data"`
-}
-
 const (
 	KubeletDefaultJobName = "kubelet"
 	KubeStateMetricsDefaultJobName = "kube-state-metrics"
 )
-
-func queryPrometheus(prometheusParams PrometheusParams, query string) (PrometheusResponse, error) {
-	var response PrometheusResponse
-
-	u, _ := url.Parse(prometheusParams.url+"/api/v1/query")
-	q := u.Query()
-	q.Add("query", query)
-
-	u.RawQuery = q.Encode()
-
-	// Create an HTTP client with Basic Authentication credentials
-	client := &http.Client{}
-	req, err := http.NewRequest("GET", u.String(), nil)
-	if err != nil {
-		return response, err
-	}
-	if prometheusParams.username != "" {
-		req.SetBasicAuth(prometheusParams.username, prometheusParams.password)
-	}
-	for key, value := range prometheusParams.headers {
-		req.Header.Add(key, value)
-	}
-
-
-	// Perform the request
-	resp, err := client.Do(req)
-	if err != nil {
-		return response, err
-	}
-	defer resp.Body.Close()
-
-	// Check the HTTP status code
-	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			fmt.Printf("Make sure filtering condition is correct")
-		} 
-		return response, fmt.Errorf("unexpected HTTP status code: %v", resp.Status)
-	}
-
-	// Read and parse the response body
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return response, err
-	}
-	
-	if err := json.Unmarshal(body, &response); err != nil {
-		return response, fmt.Errorf("error parsing JSON response: %v", err)
-	}
-
-	return response, err
-}
 
 func askPrometheusParams() (PrometheusParams, error) {
 	var prometheusParams PrometheusParams
@@ -155,8 +75,29 @@ func askPrometheusParams() (PrometheusParams, error) {
 	return prometheusParams, nil
 }
 
-func preCheckPrometheus(prometheusParams PrometheusParams) error {
-	expectedMetrics := map[string]string{
+func checkKubeNodeLabels(prometheusParams PrometheusParams) error {
+	response, err := prometheusGetLabels(prometheusParams, "kube_node_labels")
+	if err != nil {
+		return err
+	}
+	if len(response.Data) == 0 {
+		return fmt.Errorf(" - kube_node_labels metric is missing\n   make sure you have enabled the labels collection")
+	}
+	labelsCount := 0
+	for _, label := range response.Data {
+		if strings.HasPrefix(label, "label_") {
+			labelsCount += 1
+		}
+	} 
+	if labelsCount == 0 {
+		return fmt.Errorf(" - kube_node_labels labels must have a `label_` prefix")
+	}
+	fmt.Printf("Found %d labels in kube_node_labels metric\n", labelsCount)
+	return nil
+}
+
+func getExpectedMetricsList(prometheusParams PrometheusParams) map[string]string {
+	return map[string]string{
 		"kube_node_labels": prometheusParams.kubeStateMetricsJobName,
 		"kube_node_info": prometheusParams.kubeStateMetricsJobName,
 		"kube_node_status_capacity": prometheusParams.kubeStateMetricsJobName,
@@ -173,60 +114,75 @@ func preCheckPrometheus(prometheusParams PrometheusParams) error {
 		"kube_pod_completion_time": prometheusParams.kubeStateMetricsJobName,
 		"kube_replicaset_owner": prometheusParams.kubeStateMetricsJobName,
 	}
+}
 
-	errors := 0
-	missingMetrics := false
-	differentJobNames := false
+func checkJobNameError(response PrometheusQueryResponse, jobName string, metricName string) bool {
+	for _, metric := range response.Data.Result {
+		if metric.Metric.Job == jobName {
+			fmt.Printf("Found metric %s, job name: %s\n", metricName, metric.Metric.Job)
+			return false
+		}
+	}
+	fmt.Printf("Can't find metric %s with the specified job name %s\n", metricName, jobName)
+	for _, metric := range response.Data.Result {
+		fmt.Printf("Found job name: %s\n", metric.Metric.Job)
+	}
+	return true
+}
+
+func preCheckPrometheus(prometheusParams PrometheusParams) error {
+	expectedMetrics := getExpectedMetricsList(prometheusParams)
+
+	var errors []error
+	missingMetricsError := false
+	differentJobNamesError := false
 	for metricName, jobName := range expectedMetrics {
 
 		// TODO: which time interval we want??
-		response, err := queryPrometheus(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})[2h]", metricName, prometheusParams.queryCondition))
+		response, err := makePrometheusQuery(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.queryCondition))
 		if err != nil {
 			return err
 		}
 
 		if len(response.Data.Result) == 0 {
 			fmt.Printf("Missing metric %s\n", metricName)
-			missingMetrics = true
-			errors += 1
+			missingMetricsError = true
 			continue
 		}
-		
-		differentJobNames = true
-		for _, metric := range response.Data.Result {
-			if metric.Metric.Job == jobName {
-				differentJobNames = false
-				fmt.Printf("Found metric %s, job name: %s\n", metricName, metric.Metric.Job)
-				break
-			}
-		}
-		if differentJobNames {
-			errors += 1
-			fmt.Printf("Can't find metric %s with the specified job name %s\n", metricName, jobName)
-			for _, metric := range response.Data.Result {
-				fmt.Printf("Found job name: %s\n", metric.Metric.Job)
-			}
+		if checkJobNameError(response, jobName, metricName) {
+			differentJobNamesError = true
 		}
 
 	}
+	if missingMetricsError {
+		errors = append(errors, fmt.Errorf(` - Some metrics are missing, check if all required targets are enabled and healthy
+		   CAdvisor and kube-state-metrics are required`))
+	}
+	if differentJobNamesError {
+		errors = append(errors, fmt.Errorf(" - Some metrics have different job names\n   Specify correct job names in prompt"))
+	}
 
+	kubeNodeLabelsError := checkKubeNodeLabels(prometheusParams)
+	if kubeNodeLabelsError != nil {
+		errors = append(errors, kubeNodeLabelsError)
+	}
+
+	formatResult(errors)
+
+	return nil
+}
+
+func formatResult(errors []error) {
 	fmt.Println("--------------------------------------------")
-	if errors == 0 {
+	if len(errors) == 0 {
 		fmt.Println("Validation passed")
 	} else {
 		fmt.Println("Validation did not pass")
-		if missingMetrics {
-			fmt.Println(" - Some metrics are missing, check if all required targets are enabled and healthy")
-			fmt.Println("   CAdvisor and kube-state-metrics are required")
-		}
-		if differentJobNames {
-			fmt.Println(" - Some metrics have different job names")
-			fmt.Println("   Specify correct job names in prompt")
+		for _, err := range errors {
+			fmt.Println(err)
 		}
 	}
 	fmt.Println("--------------------------------------------")
-
-	return nil
 }
 
 // checkCmd represents the check command
