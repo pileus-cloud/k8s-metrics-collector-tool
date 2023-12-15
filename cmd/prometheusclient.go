@@ -8,17 +8,15 @@ import (
 	"net/url"
 )
 
-
 type PrometheusParams struct {
-	url      string
-	username string
-	password string
-	headers  map[string]string
-	queryCondition string
-	kubeletJobName string
-	kubeStateMetricsJobName string
+	Url                     string
+	Username                string
+	Password                string
+	Headers                 map[string]string
+	QueryCondition          string
+	KubeletJobName          string
+	KubeStateMetricsJobName string
 }
-
 
 type PrometheusQueryResponse struct {
 	Status string `json:"status"`
@@ -26,7 +24,7 @@ type PrometheusQueryResponse struct {
 		ResultType string `json:"resultType"`
 		Result     []struct {
 			Metric struct {
-				Job  string `json:"job"`
+				Job string `json:"job"`
 			} `json:"metric"`
 			Value []interface{} `json:"value"`
 		} `json:"result"`
@@ -34,10 +32,9 @@ type PrometheusQueryResponse struct {
 }
 
 type PrometheusLabelsResponse struct {
-	Status string `json:"status"`
+	Status string   `json:"status"`
 	Data   []string `json:"data"`
 }
-
 
 func makePrometheusRequestGet(prometheusParams PrometheusParams, url string) (*http.Response, error) {
 	var resp *http.Response
@@ -47,10 +44,10 @@ func makePrometheusRequestGet(prometheusParams PrometheusParams, url string) (*h
 	if err != nil {
 		return resp, err
 	}
-	if prometheusParams.username != "" {
-		req.SetBasicAuth(prometheusParams.username, prometheusParams.password)
+	if prometheusParams.Username != "" {
+		req.SetBasicAuth(prometheusParams.Username, prometheusParams.Password)
 	}
-	for key, value := range prometheusParams.headers {
+	for key, value := range prometheusParams.Headers {
 		req.Header.Add(key, value)
 	}
 
@@ -65,7 +62,7 @@ func makePrometheusRequestGet(prometheusParams PrometheusParams, url string) (*h
 func makePrometheusQuery(prometheusParams PrometheusParams, query string) (PrometheusQueryResponse, error) {
 	var response PrometheusQueryResponse
 
-	u, _ := url.Parse(prometheusParams.url+"/api/v1/query")
+	u, _ := url.Parse(prometheusParams.Url + "/api/v1/query")
 	q := u.Query()
 	q.Add("query", query)
 
@@ -76,7 +73,7 @@ func makePrometheusQuery(prometheusParams PrometheusParams, query string) (Prome
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			fmt.Println("Make sure filtering condition is correct")
-		} 
+		}
 		return response, fmt.Errorf("Unexpected HTTP status code: %v", resp.Status)
 	}
 
@@ -86,7 +83,7 @@ func makePrometheusQuery(prometheusParams PrometheusParams, query string) (Prome
 	if err != nil {
 		return response, err
 	}
-	
+
 	if err := json.Unmarshal(body, &response); err != nil {
 		return response, fmt.Errorf("error parsing JSON response: %v", err)
 	}
@@ -97,7 +94,7 @@ func makePrometheusQuery(prometheusParams PrometheusParams, query string) (Prome
 func prometheusGetLabels(prometheusParams PrometheusParams, metric string) (PrometheusLabelsResponse, error) {
 	var response PrometheusLabelsResponse
 
-	u, _ := url.Parse(prometheusParams.url+"/api/v1/labels")
+	u, _ := url.Parse(prometheusParams.Url + "/api/v1/labels")
 	q := u.Query()
 	q.Add("match[]", metric)
 
@@ -113,7 +110,7 @@ func prometheusGetLabels(prometheusParams PrometheusParams, metric string) (Prom
 	if err != nil {
 		return response, err
 	}
-	
+
 	if err := json.Unmarshal(body, &response); err != nil {
 		return response, fmt.Errorf("error parsing JSON response: %v", err)
 	}

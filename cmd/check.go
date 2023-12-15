@@ -1,4 +1,3 @@
-
 package cmd
 
 import (
@@ -11,7 +10,7 @@ import (
 )
 
 const (
-	KubeletDefaultJobName = "kubelet"
+	KubeletDefaultJobName          = "kubelet"
 	KubeStateMetricsDefaultJobName = "kube-state-metrics"
 )
 
@@ -21,22 +20,22 @@ func askPrometheusParams() (PrometheusParams, error) {
 
 	fmt.Printf("Prometheus url: ")
 
-	prometheusParams.url, _ = reader.ReadString('\n')
-	prometheusParams.url = strings.TrimSpace(prometheusParams.url)
+	prometheusParams.Url, _ = reader.ReadString('\n')
+	prometheusParams.Url = strings.TrimSpace(prometheusParams.Url)
 
-	if prometheusParams.url == "" {
+	if prometheusParams.Url == "" {
 		return prometheusParams, fmt.Errorf("Prometheus url can't be empty")
 	}
 
 	fmt.Printf("Username (leave empty if no authentication is required): ")
 
-	prometheusParams.username, _ = reader.ReadString('\n')
-	prometheusParams.username = strings.TrimSpace(prometheusParams.username)
+	prometheusParams.Username, _ = reader.ReadString('\n')
+	prometheusParams.Username = strings.TrimSpace(prometheusParams.Username)
 
-	if prometheusParams.username != "" {
+	if prometheusParams.Username != "" {
 		fmt.Printf("Password: ")
 
-		prometheusParams.password, _ = reader.ReadString('\n')
+		prometheusParams.Password, _ = reader.ReadString('\n')
 	}
 
 	fmt.Printf("Additional headers (format: header1:value1,header2:value2, leave empty if no headers required): ")
@@ -44,32 +43,32 @@ func askPrometheusParams() (PrometheusParams, error) {
 	headers = strings.TrimSpace(headers)
 	if headers != "" {
 		headers_array := strings.Split(headers, ",")
-		prometheusParams.headers = make(map[string]string)
+		prometheusParams.Headers = make(map[string]string)
 		for _, header := range headers_array {
 			parts := strings.Split(header, ":")
 			if len(parts) != 2 {
 				return prometheusParams, fmt.Errorf("Wrong headers format. Use this format: header1:value1,header2:value2")
 			}
-			prometheusParams.headers[parts[0]] = parts[1]
+			prometheusParams.Headers[parts[0]] = parts[1]
 		}
 	}
-	
+
 	fmt.Printf("Enter a filtering condition for queries (leave empty if no filtering is required): ")
-	prometheusParams.queryCondition, _ = reader.ReadString('\n')
-	prometheusParams.queryCondition = strings.TrimSpace(prometheusParams.queryCondition)
+	prometheusParams.QueryCondition, _ = reader.ReadString('\n')
+	prometheusParams.QueryCondition = strings.TrimSpace(prometheusParams.QueryCondition)
 
 	fmt.Printf("Enter the kubelet job name (default `kubelet`): ")
-	prometheusParams.kubeletJobName, _ = reader.ReadString('\n')
-	prometheusParams.kubeletJobName = strings.TrimSpace(prometheusParams.kubeletJobName)
-	if prometheusParams.kubeletJobName == "" {
-		prometheusParams.kubeletJobName = KubeletDefaultJobName
+	prometheusParams.KubeletJobName, _ = reader.ReadString('\n')
+	prometheusParams.KubeletJobName = strings.TrimSpace(prometheusParams.KubeletJobName)
+	if prometheusParams.KubeletJobName == "" {
+		prometheusParams.KubeletJobName = KubeletDefaultJobName
 	}
 
 	fmt.Printf("Enter the kube-state-metrics job name (default `kube-state-metrics`): ")
-	prometheusParams.kubeStateMetricsJobName, _ = reader.ReadString('\n')
-	prometheusParams.kubeStateMetricsJobName = strings.TrimSpace(prometheusParams.kubeStateMetricsJobName)
-	if prometheusParams.kubeStateMetricsJobName == "" {
-		prometheusParams.kubeStateMetricsJobName = KubeStateMetricsDefaultJobName
+	prometheusParams.KubeStateMetricsJobName, _ = reader.ReadString('\n')
+	prometheusParams.KubeStateMetricsJobName = strings.TrimSpace(prometheusParams.KubeStateMetricsJobName)
+	if prometheusParams.KubeStateMetricsJobName == "" {
+		prometheusParams.KubeStateMetricsJobName = KubeStateMetricsDefaultJobName
 	}
 
 	return prometheusParams, nil
@@ -81,14 +80,14 @@ func checkKubeNodeLabels(prometheusParams PrometheusParams) error {
 		return err
 	}
 	if len(response.Data) == 0 {
-		return fmt.Errorf(" - kube_node_labels metric is missing\n   make sure you have enabled the labels collection")
+		return fmt.Errorf(" - kube_node_labels metric is missing\n   Make sure you have enabled the labels collection")
 	}
 	labelsCount := 0
 	for _, label := range response.Data {
 		if strings.HasPrefix(label, "label_") {
 			labelsCount += 1
 		}
-	} 
+	}
 	if labelsCount == 0 {
 		return fmt.Errorf(" - kube_node_labels labels must have a `label_` prefix")
 	}
@@ -98,21 +97,21 @@ func checkKubeNodeLabels(prometheusParams PrometheusParams) error {
 
 func getExpectedMetricsList(prometheusParams PrometheusParams) map[string]string {
 	return map[string]string{
-		"kube_node_labels": prometheusParams.kubeStateMetricsJobName,
-		"kube_node_info": prometheusParams.kubeStateMetricsJobName,
-		"kube_node_status_capacity": prometheusParams.kubeStateMetricsJobName,
-		"kube_pod_container_resource_requests": prometheusParams.kubeStateMetricsJobName,
-		"kube_pod_info": prometheusParams.kubeStateMetricsJobName,
-		"kube_pod_container_info": prometheusParams.kubeStateMetricsJobName,
-		"kube_pod_container_resource_limits": prometheusParams.kubeStateMetricsJobName,
-		"container_cpu_usage_seconds_total": prometheusParams.kubeletJobName,
-		"container_memory_usage_bytes": prometheusParams.kubeletJobName,
-		"container_network_receive_bytes_total": prometheusParams.kubeletJobName,
-		"container_network_transmit_bytes_total": prometheusParams.kubeletJobName,
-		"kube_pod_labels": prometheusParams.kubeStateMetricsJobName,
-		"kube_pod_created": prometheusParams.kubeStateMetricsJobName,
-		"kube_pod_completion_time": prometheusParams.kubeStateMetricsJobName,
-		"kube_replicaset_owner": prometheusParams.kubeStateMetricsJobName,
+		"kube_node_labels":                       prometheusParams.KubeStateMetricsJobName,
+		"kube_node_info":                         prometheusParams.KubeStateMetricsJobName,
+		"kube_node_status_capacity":              prometheusParams.KubeStateMetricsJobName,
+		"kube_pod_container_resource_requests":   prometheusParams.KubeStateMetricsJobName,
+		"kube_pod_info":                          prometheusParams.KubeStateMetricsJobName,
+		"kube_pod_container_info":                prometheusParams.KubeStateMetricsJobName,
+		"kube_pod_container_resource_limits":     prometheusParams.KubeStateMetricsJobName,
+		"container_cpu_usage_seconds_total":      prometheusParams.KubeletJobName,
+		"container_memory_usage_bytes":           prometheusParams.KubeletJobName,
+		"container_network_receive_bytes_total":  prometheusParams.KubeletJobName,
+		"container_network_transmit_bytes_total": prometheusParams.KubeletJobName,
+		"kube_pod_labels":                        prometheusParams.KubeStateMetricsJobName,
+		"kube_pod_created":                       prometheusParams.KubeStateMetricsJobName,
+		"kube_pod_completion_time":               prometheusParams.KubeStateMetricsJobName,
+		"kube_replicaset_owner":                  prometheusParams.KubeStateMetricsJobName,
 	}
 }
 
@@ -138,8 +137,7 @@ func preCheckPrometheus(prometheusParams PrometheusParams) error {
 	differentJobNamesError := false
 	for metricName, jobName := range expectedMetrics {
 
-		// TODO: which time interval we want??
-		response, err := makePrometheusQuery(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.queryCondition))
+		response, err := makePrometheusQuery(prometheusParams, fmt.Sprintf("count by (job) (%s{%s})", metricName, prometheusParams.QueryCondition))
 		if err != nil {
 			return err
 		}
@@ -155,8 +153,7 @@ func preCheckPrometheus(prometheusParams PrometheusParams) error {
 
 	}
 	if missingMetricsError {
-		errors = append(errors, fmt.Errorf(` - Some metrics are missing, check if all required targets are enabled and healthy
-		   CAdvisor and kube-state-metrics are required`))
+		errors = append(errors, fmt.Errorf(" - Some metrics are missing\n   Check if all required targets are enabled and healthy"))
 	}
 	if differentJobNamesError {
 		errors = append(errors, fmt.Errorf(" - Some metrics have different job names\n   Specify correct job names in prompt"))
@@ -167,15 +164,16 @@ func preCheckPrometheus(prometheusParams PrometheusParams) error {
 		errors = append(errors, kubeNodeLabelsError)
 	}
 
-	formatResult(errors)
+	formatResult(errors, prometheusParams)
 
 	return nil
 }
 
-func formatResult(errors []error) {
+func formatResult(errors []error, prometheusParams PrometheusParams) {
 	fmt.Println("--------------------------------------------")
 	if len(errors) == 0 {
 		fmt.Println("Validation passed")
+		generateValuesFile(prometheusParams)
 	} else {
 		fmt.Println("Validation did not pass")
 		for _, err := range errors {
@@ -185,7 +183,6 @@ func formatResult(errors []error) {
 	fmt.Println("--------------------------------------------")
 }
 
-// checkCmd represents the check command
 var checkCmd = &cobra.Command{
 	Use:   "check",
 	Short: "Check if all required metrics are available in prometheus",
