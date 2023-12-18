@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"net/url"
 
 	"github.com/spf13/cobra"
 )
@@ -26,6 +27,11 @@ func askPrometheusParams() (PrometheusParams, error) {
 	if prometheusParams.Url == "" {
 		return prometheusParams, fmt.Errorf("Prometheus url can't be empty")
 	}
+	_, err := url.ParseRequestURI(prometheusParams.Url)
+	if err != nil {
+		return prometheusParams, err
+	}
+
 
 	fmt.Printf("Username (leave empty if no authentication is required): ")
 
@@ -173,7 +179,20 @@ func formatResult(errors []error, prometheusParams PrometheusParams) {
 	fmt.Println("--------------------------------------------")
 	if len(errors) == 0 {
 		fmt.Println("Validation passed")
-		generateValuesFile(prometheusParams)
+		fmt.Printf("Do you want to generate values file? (Y/n): ")
+		var answer string
+		fmt.Scanln(&answer)
+		answer = strings.TrimSpace(strings.ToLower(answer))
+		if answer == "n" || answer == "no" {
+			return
+		}
+		fmt.Printf("Enter a path to save the file to [./values.yaml]: ")
+		var path string
+		fmt.Scanln(&path)
+		if strings.TrimSpace(path) == "" {
+			path = "./values.yaml"
+		}
+		generateValuesFile(prometheusParams, path)
 	} else {
 		fmt.Println("Validation did not pass")
 		for _, err := range errors {

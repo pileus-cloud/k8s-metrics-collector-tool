@@ -12,7 +12,7 @@ type TemplateData struct {
 	HeadersString    string
 }
 
-func generateValuesFile(prometheusParams PrometheusParams) {
+func generateValuesFile(prometheusParams PrometheusParams, path string) {
 	yamlTemplateString := `
 image:
   repository: public.ecr.aws/i5o6o6d7/k8s-metrics-agent
@@ -107,7 +107,7 @@ environmentSecrets:
 		return
 	}
 
-	file, err := os.Create("values.yaml")
+	file, err := os.Create(path)
 	if err != nil {
 		fmt.Println("Error creating file:", err)
 		return
@@ -120,5 +120,5 @@ environmentSecrets:
 		return
 	}
 
-	fmt.Println("Generated values file: values.yaml")
+	fmt.Println("Generated values file: " + path)
 }

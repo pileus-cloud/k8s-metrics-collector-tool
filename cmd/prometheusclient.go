@@ -69,6 +69,9 @@ func makePrometheusQuery(prometheusParams PrometheusParams, query string) (Prome
 	u.RawQuery = q.Encode()
 
 	resp, err := makePrometheusRequestGet(prometheusParams, u.String())
+	if err != nil {
+		return response, err
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
@@ -101,6 +104,9 @@ func prometheusGetLabels(prometheusParams PrometheusParams, metric string) (Prom
 	u.RawQuery = q.Encode()
 
 	resp, err := makePrometheusRequestGet(prometheusParams, u.String())
+	if err != nil {
+		return response, err
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return response, fmt.Errorf("unexpected HTTP status code: %v", resp.Status)
